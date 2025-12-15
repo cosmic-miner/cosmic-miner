@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "Cosmic Miner",
+    "slug": "cosmic-miner",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "backgroundColor": "#0a0a1a"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0a0a1a"
+      },
+      "package": "com.cosmicminer.app"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "6d59a642-f2a1-4fc6-96ae-dfdd3de87277"
+      }
+    }
+  }
+}
