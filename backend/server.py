@@ -37,6 +37,8 @@ TRC20_ADDRESS = "TP92d2cyjwXNdFuJN9P8WeQ2jDWW7rvJMA"
 WELCOME_BONUS = 100  # Hoşgeldin bonusu
 WITHDRAW_THRESHOLD = 10000  # Para çekme eşiği
 USDT_PER_COIN = 0.001  # 1000 coin = 1 USDT
+REFERRAL_BONUS_INVITER = 200  # Davet edene verilen bonus
+REFERRAL_BONUS_INVITED = 50  # Davet edilene ekstra bonus
 
 app = FastAPI(title="Cosmic Miner API")
 api_router = APIRouter(prefix="/api")
@@ -47,6 +49,7 @@ class UserCreate(BaseModel):
     email: EmailStr
     password: str
     username: str
+    referral_code: Optional[str] = None  # Davet kodu (opsiyonel)
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -64,6 +67,9 @@ class User(BaseModel):
     active_ship: str = "basic"
     active_boosts: List[dict] = []
     is_admin: bool = False
+    referral_code: str = Field(default_factory=lambda: str(uuid.uuid4())[:8].upper())
+    referred_by: Optional[str] = None
+    referral_count: int = 0
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class TokenResponse(BaseModel):
@@ -197,16 +203,36 @@ async def register(user_data: UserCreate):
     if existing_username:
         raise HTTPException(status_code=400, detail="Kullanıcı adı zaten alınmış")
     
+    # Referral bonus hesapla
+    bonus_coins = WELCOME_BONUS
+    referred_by_user = None
+    
+    # Davet kodu varsa kontrol et
+    if user_data.referral_code:
+        referred_by_user = await db.users.find_one({"referral_code": user_data.referral_code.upper()})
+        if referred_by_user:
+            bonus_coins += REFERRAL_BONUS_INVITED  # Davet edilene ekstra bonus
+    
     # Create user with welcome bonus
     user = User(
         email=user_data.email,
         username=user_data.username,
         password_hash=hash_password(user_data.password),
-        coins=WELCOME_BONUS,
-        total_earned=WELCOME_BONUS
+        coins=bonus_coins,
+        total_earned=bonus_coins,
+        referred_by=referred_by_user["id"] if referred_by_user else None
     )
     
     await db.users.insert_one(user.dict())
+    
+    # Davet edene bonus ver
+    if referred_by_user:
+        await db.users.update_one(
+            {"id": referred_by_user["id"]},
+            {
+                "$inc": {"coins": REFERRAL_BONUS_INVITER, "total_earned": REFERRAL_BONUS_INVITER, "referral_count": 1}
+            }
+        )
     
     token = create_access_token({"user_id": user.id})
     
@@ -261,7 +287,42 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         "owned_ships": current_user.get("owned_ships", ["basic"]),
         "active_ship": current_user.get("active_ship", "basic"),
         "active_boosts": current_user.get("active_boosts", []),
-        "is_admin": current_user.get("is_admin", False)
+        "is_admin": current_user.get("is_admin", False),
+        "referral_code": current_user.get("referral_code", ""),
+        "referral_count": current_user.get("referral_count", 0)
+    }
+
+# ============ REFERRAL ENDPOINTS ============
+
+@api_router.get("/referral/info")
+async def get_referral_info(current_user: dict = Depends(get_current_user)):
+    """Kullanıcının davet bilgilerini getir"""
+    return {
+        "referral_code": current_user.get("referral_code", ""),
+        "referral_count": current_user.get("referral_count", 0),
+        "bonus_per_invite": REFERRAL_BONUS_INVITER,
+        "bonus_for_invited": REFERRAL_BONUS_INVITED,
+        "total_earned_from_referrals": current_user.get("referral_count", 0) * REFERRAL_BONUS_INVITER
+    }
+
+@api_router.get("/referral/invited-users")
+async def get_invited_users(current_user: dict = Depends(get_current_user)):
+    """Davet edilen kullanıcıları listele"""
+    invited_users = await db.users.find(
+        {"referred_by": current_user["id"]},
+        {"username": 1, "created_at": 1, "total_earned": 1}
+    ).to_list(100)
+    
+    return {
+        "invited_users": [
+            {
+                "username": user["username"],
+                "joined_at": user.get("created_at"),
+                "total_earned": user.get("total_earned", 0)
+            }
+            for user in invited_users
+        ],
+        "total_invited": len(invited_users)
     }
 
 # ============ GAME ENDPOINTS ============

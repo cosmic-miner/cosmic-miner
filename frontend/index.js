@@ -8,45 +8,155 @@ import {
   ScrollView,
   TextInput,
   Dimensions,
+  Share,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
 
 const { width, height } = Dimensions.get('window');
 const GAME_HEIGHT = height - 300;
 const SHIP_SIZE = 50;
 const CRYSTAL_SIZE = 30;
 
-// TRC20 Adres
+// API URL - Production'da değiştir
+const API_URL = "https://6d0699a9-cb44-4212-8039-3822d47fb0c1.preview.emergentagent.com";
 const TRC20_ADDRESS = "TP92d2cyjwXNdFuJN9P8WeQ2jDWW7rvJMA";
 
 export default function App() {
-  const [screen, setScreen] = useState('menu'); // menu, game, shop, wallet
+  // Auth state
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [token, setToken] = useState(null);
+  const [user, setUser] = useState(null);
+  
+  // Auth form state
+  const [authScreen, setAuthScreen] = useState('login'); // login, register
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('');
+  const [referralCode, setReferralCode] = useState('');
+  
+  // App state
+  const [screen, setScreen] = useState('menu'); // menu, game, shop, wallet, referral
   const [coins, setCoins] = useState(100);
   const [shipX, setShipX] = useState(width / 2);
   const [score, setScore] = useState(0);
   const [crystals, setCrystals] = useState([]);
   const [gameRunning, setGameRunning] = useState(false);
   const [highScore, setHighScore] = useState(0);
+  
+  // Referral state
+  const [referralInfo, setReferralInfo] = useState(null);
+  const [invitedUsers, setInvitedUsers] = useState([]);
 
   useEffect(() => {
-    loadData();
+    checkAuth();
   }, []);
 
-  const loadData = async () => {
+  const checkAuth = async () => {
     try {
-      const savedCoins = await AsyncStorage.getItem('coins');
-      const savedHighScore = await AsyncStorage.getItem('highScore');
-      if (savedCoins) setCoins(parseInt(savedCoins));
-      if (savedHighScore) setHighScore(parseInt(savedHighScore));
-    } catch (e) {}
+      const savedToken = await AsyncStorage.getItem('token');
+      if (savedToken) {
+        setToken(savedToken);
+        await fetchUser(savedToken);
+      }
+    } catch (e) {
+      console.log('Auth check error:', e);
+    }
   };
 
-  const saveData = async (newCoins, newHighScore) => {
+  const fetchUser = async (authToken) => {
     try {
-      await AsyncStorage.setItem('coins', newCoins.toString());
-      await AsyncStorage.setItem('highScore', newHighScore.toString());
-    } catch (e) {}
+      const response = await axios.get(`${API_URL}/api/auth/me`, {
+        headers: { Authorization: `Bearer ${authToken}` }
+      });
+      setUser(response.data);
+      setCoins(response.data.coins);
+      setIsLoggedIn(true);
+    } catch (e) {
+      console.log('Fetch user error:', e);
+      await AsyncStorage.removeItem('token');
+    }
+  };
+
+  const handleLogin = async () => {
+    if (!email || !password) {
+      Alert.alert('Hata', 'Email ve şifre gerekli');
+      return;
+    }
+    try {
+      const response = await axios.post(`${API_URL}/api/auth/login`, { email, password });
+      const { access_token, user: userData } = response.data;
+      await AsyncStorage.setItem('token', access_token);
+      setToken(access_token);
+      setUser(userData);
+      setCoins(userData.coins);
+      setIsLoggedIn(true);
+    } catch (e) {
+      Alert.alert('Hata', e.response?.data?.detail || 'Giriş başarısız');
+    }
+  };
+
+  const handleRegister = async () => {
+    if (!email || !password || !username) {
+      Alert.alert('Hata', 'Tüm alanlar gerekli');
+      return;
+    }
+    try {
+      const response = await axios.post(`${API_URL}/api/auth/register`, { 
+        email, 
+        password, 
+        username,
+        referral_code: referralCode || null
+      });
+      const { access_token, user: userData } = response.data;
+      await AsyncStorage.setItem('token', access_token);
+      setToken(access_token);
+      setUser(userData);
+      setCoins(userData.coins);
+      setIsLoggedIn(true);
+      
+      const bonusMsg = referralCode 
+        ? `🎁 ${userData.coins} coin hoşgeldin bonusu! (Davet bonusu dahil)` 
+        : `🎁 ${userData.coins} coin hoşgeldin bonusu!`;
+      Alert.alert('Hoş Geldin!', bonusMsg);
+    } catch (e) {
+      Alert.alert('Hata', e.response?.data?.detail || 'Kayıt başarısız');
+    }
+  };
+
+  const handleLogout = async () => {
+    await AsyncStorage.removeItem('token');
+    setToken(null);
+    setUser(null);
+    setIsLoggedIn(false);
+    setScreen('menu');
+  };
+
+  const fetchReferralInfo = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/api/referral/info`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setReferralInfo(response.data);
+      
+      const usersResponse = await axios.get(`${API_URL}/api/referral/invited-users`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setInvitedUsers(usersResponse.data.invited_users);
+    } catch (e) {
+      console.log('Referral fetch error:', e);
+    }
+  };
+
+  const shareReferralCode = async () => {
+    try {
+      await Share.share({
+        message: `🚀 Cosmic Miner'da beni davet kodum ile katıl ve ekstra coin kazan!\n\nDavet Kodum: ${user?.referral_code || referralInfo?.referral_code}\n\nOyunu indir ve kazan!`,
+      });
+    } catch (e) {
+      Alert.alert('Davet Kodu', user?.referral_code || referralInfo?.referral_code);
+    }
   };
 
   // Game Logic
@@ -65,7 +175,6 @@ export default function App() {
     const moveInterval = setInterval(() => {
       setCrystals(prev => {
         return prev.map(c => ({ ...c, y: c.y + 5 })).filter(c => {
-          // Check collision
           if (
             c.y > GAME_HEIGHT - 80 &&
             c.y < GAME_HEIGHT - 30 &&
@@ -74,7 +183,6 @@ export default function App() {
             setScore(s => s + 10);
             return false;
           }
-          // Remove if off screen
           if (c.y > GAME_HEIGHT) return false;
           return true;
         });
@@ -94,21 +202,131 @@ export default function App() {
     setGameRunning(true);
   };
 
-  const endGame = () => {
+  const endGame = async () => {
     setGameRunning(false);
-    const newCoins = coins + score;
-    const newHighScore = Math.max(highScore, score);
-    setCoins(newCoins);
-    setHighScore(newHighScore);
-    saveData(newCoins, newHighScore);
-    Alert.alert(
-      '🎮 Oyun Bitti!',
-      `Skor: ${score}\nKazanılan Coin: ${score}\nToplam Coin: ${newCoins}`
-    );
+    
+    if (token) {
+      try {
+        const response = await axios.post(`${API_URL}/api/game/result`, {
+          coins_earned: score,
+          distance: 0,
+          crystals_collected: Math.floor(score / 10)
+        }, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        
+        setCoins(response.data.total_coins);
+        Alert.alert(
+          '🎮 Oyun Bitti!',
+          `Skor: ${score}\nKazanılan Coin: ${response.data.coins_earned}\nToplam Coin: ${response.data.total_coins}`
+        );
+        
+        await fetchUser(token);
+      } catch (e) {
+        console.log('Score submit error:', e);
+      }
+    } else {
+      const newCoins = coins + score;
+      const newHighScore = Math.max(highScore, score);
+      setCoins(newCoins);
+      setHighScore(newHighScore);
+      Alert.alert('🎮 Oyun Bitti!', `Skor: ${score}\nToplam Coin: ${newCoins}`);
+    }
   };
 
   const moveLeft = () => setShipX(x => Math.max(0, x - 40));
   const moveRight = () => setShipX(x => Math.min(width - SHIP_SIZE, x + 40));
+
+  // AUTH SCREENS
+  if (!isLoggedIn) {
+    if (authScreen === 'login') {
+      return (
+        <View style={styles.container}>
+          <StatusBar style="light" />
+          <Text style={styles.title}>🚀 COSMIC MINER</Text>
+          <Text style={styles.subtitle}>Giriş Yap</Text>
+          
+          <TextInput
+            style={styles.input}
+            placeholder="Email"
+            placeholderTextColor="#666"
+            value={email}
+            onChangeText={setEmail}
+            keyboardType="email-address"
+            autoCapitalize="none"
+          />
+          <TextInput
+            style={styles.input}
+            placeholder="Şifre"
+            placeholderTextColor="#666"
+            value={password}
+            onChangeText={setPassword}
+            secureTextEntry
+          />
+          
+          <TouchableOpacity style={styles.playBtn} onPress={handleLogin}>
+            <Text style={styles.playBtnText}>GİRİŞ YAP</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity onPress={() => setAuthScreen('register')}>
+            <Text style={styles.linkText}>Hesabın yok mu? <Text style={styles.linkHighlight}>Kayıt Ol</Text></Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    // REGISTER SCREEN
+    return (
+      <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
+        <StatusBar style="light" />
+        <Text style={styles.title}>🚀 COSMIC MINER</Text>
+        <Text style={styles.subtitle}>Yeni Hesap Oluştur</Text>
+        <Text style={styles.bonusText}>🎁 100 Coin Hoşgeldin Bonusu!</Text>
+        
+        <TextInput
+          style={styles.input}
+          placeholder="Kullanıcı Adı"
+          placeholderTextColor="#666"
+          value={username}
+          onChangeText={setUsername}
+          autoCapitalize="none"
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="Email"
+          placeholderTextColor="#666"
+          value={email}
+          onChangeText={setEmail}
+          keyboardType="email-address"
+          autoCapitalize="none"
+        />
+        <TextInput
+          style={styles.input}
+          placeholder="Şifre"
+          placeholderTextColor="#666"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+        />
+        <TextInput
+          style={[styles.input, styles.referralInput]}
+          placeholder="Davet Kodu (Opsiyonel) - +50 Bonus!"
+          placeholderTextColor="#888"
+          value={referralCode}
+          onChangeText={setReferralCode}
+          autoCapitalize="characters"
+        />
+        
+        <TouchableOpacity style={styles.playBtn} onPress={handleRegister}>
+          <Text style={styles.playBtnText}>KAYIT OL</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity onPress={() => setAuthScreen('login')}>
+          <Text style={styles.linkText}>Zaten hesabın var mı? <Text style={styles.linkHighlight}>Giriş Yap</Text></Text>
+        </TouchableOpacity>
+      </ScrollView>
+    );
+  }
 
   // MENU SCREEN
   if (screen === 'menu') {
@@ -116,7 +334,7 @@ export default function App() {
       <View style={styles.container}>
         <StatusBar style="light" />
         <Text style={styles.title}>🚀 COSMIC MINER</Text>
-        <Text style={styles.subtitle}>Uzayın Derinliklerinde Kazan!</Text>
+        <Text style={styles.welcomeText}>Hoş geldin, {user?.username}!</Text>
         
         <View style={styles.coinBox}>
           <Text style={styles.coinText}>💰 {coins} Coin</Text>
@@ -134,8 +352,59 @@ export default function App() {
           <Text style={styles.menuBtnText}>💳 Cüzdan</Text>
         </TouchableOpacity>
         
-        <Text style={styles.highScore}>🏆 En Yüksek: {highScore}</Text>
+        <TouchableOpacity style={[styles.menuBtn, styles.referralBtn]} onPress={() => { fetchReferralInfo(); setScreen('referral'); }}>
+          <Text style={styles.menuBtnText}>👥 Arkadaş Davet Et (+200 Coin!)</Text>
+        </TouchableOpacity>
+        
+        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout}>
+          <Text style={styles.logoutText}>Çıkış Yap</Text>
+        </TouchableOpacity>
       </View>
+    );
+  }
+
+  // REFERRAL SCREEN
+  if (screen === 'referral') {
+    return (
+      <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
+        <StatusBar style="light" />
+        
+        <TouchableOpacity onPress={() => setScreen('menu')}>
+          <Text style={styles.backBtn}>← Geri</Text>
+        </TouchableOpacity>
+        
+        <Text style={styles.pageTitle}>👥 Arkadaş Davet Et</Text>
+        
+        <View style={styles.referralCard}>
+          <Text style={styles.referralLabel}>Senin Davet Kodun:</Text>
+          <Text style={styles.referralCodeBig}>{user?.referral_code || referralInfo?.referral_code}</Text>
+          
+          <TouchableOpacity style={styles.shareBtn} onPress={shareReferralCode}>
+            <Text style={styles.shareBtnText}>📤 Paylaş</Text>
+          </TouchableOpacity>
+        </View>
+        
+        <View style={styles.bonusCard}>
+          <Text style={styles.bonusTitle}>🎁 Bonus Detayları</Text>
+          <Text style={styles.bonusItem}>✅ Sen davet ettiğinde: +200 Coin</Text>
+          <Text style={styles.bonusItem}>✅ Arkadaşın katıldığında: +50 Coin (arkadaşa)</Text>
+        </View>
+        
+        <View style={styles.statsCard}>
+          <Text style={styles.statsTitle}>📊 İstatistikler</Text>
+          <Text style={styles.statsItem}>Davet Edilen: {referralInfo?.referral_count || 0} kişi</Text>
+          <Text style={styles.statsItem}>Kazanılan: {referralInfo?.total_earned_from_referrals || 0} Coin</Text>
+        </View>
+        
+        {invitedUsers.length > 0 && (
+          <View style={styles.invitedCard}>
+            <Text style={styles.invitedTitle}>👥 Davet Ettiklerin</Text>
+            {invitedUsers.map((u, i) => (
+              <Text key={i} style={styles.invitedItem}>• {u.username}</Text>
+            ))}
+          </View>
+        )}
+      </ScrollView>
     );
   }
 
@@ -154,14 +423,8 @@ export default function App() {
         
         <View style={styles.gameArea}>
           {crystals.map(c => (
-            <Text
-              key={c.id}
-              style={[styles.crystal, { left: c.x, top: c.y }]}
-            >
-              💎
-            </Text>
+            <Text key={c.id} style={[styles.crystal, { left: c.x, top: c.y }]}>💎</Text>
           ))}
-          
           <Text style={[styles.ship, { left: shipX, bottom: 30 }]}>🛸</Text>
         </View>
         
@@ -259,6 +522,11 @@ export default function App() {
         ) : (
           <Text style={styles.lockedText}>🔒 Para çekmek için {10000 - coins} coin daha kazan!</Text>
         )}
+        
+        <View style={styles.tipBox}>
+          <Text style={styles.tipTitle}>💡 İpucu</Text>
+          <Text style={styles.tipText}>Arkadaşlarını davet ederek hızlıca coin kazanabilirsin! Her davet = 200 coin!</Text>
+        </View>
       </ScrollView>
     );
   }
@@ -274,6 +542,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 20,
     paddingTop: 60,
+    paddingBottom: 40,
   },
   title: {
     fontSize: 36,
@@ -283,10 +552,39 @@ const styles = StyleSheet.create({
     marginTop: 80,
   },
   subtitle: {
-    fontSize: 16,
+    fontSize: 18,
     color: '#888',
     textAlign: 'center',
     marginTop: 10,
+    marginBottom: 30,
+  },
+  welcomeText: {
+    fontSize: 16,
+    color: '#888',
+    textAlign: 'center',
+    marginTop: 5,
+  },
+  bonusText: {
+    fontSize: 14,
+    color: '#ffd700',
+    textAlign: 'center',
+    marginBottom: 20,
+    backgroundColor: 'rgba(255,215,0,0.1)',
+    padding: 10,
+    borderRadius: 10,
+  },
+  input: {
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 12,
+    padding: 15,
+    marginHorizontal: 30,
+    marginBottom: 15,
+    color: '#fff',
+    fontSize: 16,
+  },
+  referralInput: {
+    borderColor: '#ffd700',
+    borderWidth: 1,
   },
   coinBox: {
     backgroundColor: 'rgba(255,215,0,0.2)',
@@ -303,13 +601,13 @@ const styles = StyleSheet.create({
   },
   playBtn: {
     backgroundColor: '#00d4ff',
-    padding: 20,
+    padding: 18,
     borderRadius: 30,
-    marginTop: 40,
+    marginTop: 30,
     marginHorizontal: 50,
   },
   playBtnText: {
-    fontSize: 24,
+    fontSize: 20,
     color: '#000',
     fontWeight: 'bold',
     textAlign: 'center',
@@ -322,24 +620,126 @@ const styles = StyleSheet.create({
     marginHorizontal: 50,
   },
   menuBtnText: {
-    fontSize: 18,
+    fontSize: 16,
     color: '#fff',
     textAlign: 'center',
   },
-  highScore: {
+  referralBtn: {
+    backgroundColor: 'rgba(255,215,0,0.2)',
+    borderWidth: 1,
+    borderColor: '#ffd700',
+  },
+  linkText: {
     color: '#888',
     textAlign: 'center',
-    marginTop: 30,
+    marginTop: 25,
   },
+  linkHighlight: {
+    color: '#00d4ff',
+    fontWeight: 'bold',
+  },
+  logoutBtn: {
+    marginTop: 30,
+    padding: 10,
+  },
+  logoutText: {
+    color: '#ff6b6b',
+    textAlign: 'center',
+  },
+  backBtn: {
+    color: '#00d4ff',
+    fontSize: 18,
+    marginBottom: 20,
+  },
+  pageTitle: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 20,
+  },
+  // Referral styles
+  referralCard: {
+    backgroundColor: 'rgba(0,212,255,0.1)',
+    borderRadius: 20,
+    padding: 25,
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  referralLabel: {
+    color: '#888',
+    fontSize: 14,
+  },
+  referralCodeBig: {
+    color: '#00d4ff',
+    fontSize: 36,
+    fontWeight: 'bold',
+    letterSpacing: 3,
+    marginVertical: 15,
+  },
+  shareBtn: {
+    backgroundColor: '#00d4ff',
+    paddingVertical: 12,
+    paddingHorizontal: 30,
+    borderRadius: 25,
+  },
+  shareBtnText: {
+    color: '#000',
+    fontWeight: 'bold',
+    fontSize: 16,
+  },
+  bonusCard: {
+    backgroundColor: 'rgba(255,215,0,0.1)',
+    borderRadius: 15,
+    padding: 20,
+    marginBottom: 15,
+  },
+  bonusTitle: {
+    color: '#ffd700',
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  bonusItem: {
+    color: '#fff',
+    marginTop: 5,
+  },
+  statsCard: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 15,
+    padding: 20,
+    marginBottom: 15,
+  },
+  statsTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  statsItem: {
+    color: '#888',
+    marginTop: 5,
+  },
+  invitedCard: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 15,
+    padding: 20,
+  },
+  invitedTitle: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 10,
+  },
+  invitedItem: {
+    color: '#888',
+    marginTop: 5,
+  },
+  // Game styles
   gameHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     padding: 20,
     paddingTop: 50,
-  },
-  backBtn: {
-    color: '#00d4ff',
-    fontSize: 18,
   },
   scoreText: {
     color: '#ffd700',
@@ -393,13 +793,7 @@ const styles = StyleSheet.create({
   controlText: {
     fontSize: 30,
   },
-  pageTitle: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginTop: 20,
-    marginBottom: 20,
-  },
+  // Shop styles
   shopItem: {
     backgroundColor: 'rgba(255,255,255,0.1)',
     padding: 20,
@@ -439,12 +833,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 10,
   },
+  // Wallet styles
   walletBox: {
     backgroundColor: 'rgba(0,212,255,0.1)',
     padding: 30,
     borderRadius: 20,
     alignItems: 'center',
-    marginBottom: 30,
+    marginBottom: 20,
   },
   walletLabel: {
     color: '#888',
@@ -479,7 +874,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#00ff88',
     padding: 18,
     borderRadius: 25,
-    marginTop: 20,
   },
   withdrawBtnText: {
     color: '#000',
@@ -490,6 +884,20 @@ const styles = StyleSheet.create({
   lockedText: {
     color: '#888',
     textAlign: 'center',
+  },
+  tipBox: {
+    backgroundColor: 'rgba(255,215,0,0.1)',
+    padding: 15,
+    borderRadius: 15,
     marginTop: 20,
+  },
+  tipTitle: {
+    color: '#ffd700',
+    fontWeight: 'bold',
+    marginBottom: 5,
+  },
+  tipText: {
+    color: '#888',
+    fontSize: 13,
   },
 });
