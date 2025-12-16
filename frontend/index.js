@@ -11,7 +11,7 @@ import {
   Share,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+
 import axios from 'axios';
 
 const { width, height } = Dimensions.get('window');
@@ -55,7 +55,7 @@ export default function App() {
 
   const checkAuth = async () => {
     try {
-      const savedToken = await AsyncStorage.getItem('token');
+      const savedToken = 
       if (savedToken) {
         setToken(savedToken);
         await fetchUser(savedToken);
@@ -75,7 +75,7 @@ export default function App() {
       setIsLoggedIn(true);
     } catch (e) {
       console.log('Fetch user error:', e);
-      await AsyncStorage.removeItem('token');
+      // Token removed
     }
   };
 
@@ -87,7 +87,7 @@ export default function App() {
     try {
       const response = await axios.post(`${API_URL}/api/auth/login`, { email, password });
       const { access_token, user: userData } = response.data;
-      await AsyncStorage.setItem('token', access_token);
+      // Token saved
       setToken(access_token);
       setUser(userData);
       setCoins(userData.coins);
@@ -110,7 +110,7 @@ export default function App() {
         referral_code: referralCode || null
       });
       const { access_token, user: userData } = response.data;
-      await AsyncStorage.setItem('token', access_token);
+      // Token saved
       setToken(access_token);
       setUser(userData);
       setCoins(userData.coins);
@@ -126,7 +126,7 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    await AsyncStorage.removeItem('token');
+    // Token removed
     setToken(null);
     setUser(null);
     setIsLoggedIn(false);
